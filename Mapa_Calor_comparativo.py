@@ -18,6 +18,33 @@ def descargar_datos_yfinance(ticker, start, end):
         st.error(f"Error downloading data from yfinance for {ticker}: {e}")
         return pd.DataFrame()
 
+def calculate_ticker_ratio(data1, data2):
+    """Calculate the ratio between two tickers' closing prices."""
+    if data1.empty or data2.empty:
+        raise ValueError("One or both datasets are empty")
+
+    # Ensure both datasets have the same index
+    common_dates = data1.index.intersection(data2.index)
+    if len(common_dates) == 0:
+        raise ValueError("No overlapping dates between the two tickers")
+
+    data1 = data1.reindex(common_dates)
+    data2 = data2.reindex(common_dates)
+
+    # Calculate ratio
+    if isinstance(data1.columns, pd.MultiIndex):
+        close1 = data1['Close'].iloc[:, 0]
+    else:
+        close1 = data1['Close']
+
+    if isinstance(data2.columns, pd.MultiIndex):
+        close2 = data2['Close'].iloc[:, 0]
+    else:
+        close2 = data2['Close']
+
+    ratio = pd.DataFrame({'Close': close1 / close2}, index=common_dates)
+    return ratio
+
 def descargar_datos_analisistecnico(ticker, start_date, end_date):
     try:
         # Ensure dates are in datetime.date format
@@ -286,26 +313,27 @@ def calculate_weekly_variation(data):
     return weekly_variation
 
 def prepare_comparison_data(tickers, year, source):
-    # Initialize an empty DataFrame to store weekly variations for all tickers
     comparison_data = pd.DataFrame()
 
     for ticker in tickers:
-        # Fetch data for the entire year and the last week of the previous year
-        start_date = f"{year - 1}-12-25"  # Start from the last week of the previous year
+        start_date = f"{year - 1}-12-25"
         end_date = f"{year}-12-31"
-        stock_data = fetch_stock_data(ticker, start_date, end_date, source)
 
-        # Calculate weekly variation
+        if '/' in ticker:
+            # Handle ratio
+            ticker1, ticker2 = [t.strip() for t in ticker.split('/')]
+            data1 = fetch_stock_data(ticker1, start_date, end_date, source)
+            data2 = fetch_stock_data(ticker2, start_date, end_date, source)
+            stock_data = calculate_ticker_ratio(data1, data2)
+        else:
+            # Handle single ticker
+            stock_data = fetch_stock_data(ticker, start_date, end_date, source)
+
         weekly_variation = calculate_weekly_variation(stock_data)
-
-        # Filter for the selected year and add to the comparison DataFrame
         comparison_data[ticker] = weekly_variation.loc[f"{year}-01-01":f"{year}-12-31"]
 
-    # Ensure the index is consistent (weeks)
-    comparison_data.index = comparison_data.index.strftime('Semana %U')  # Convert to week numbers
-
+    comparison_data.index = comparison_data.index.strftime('Semana %U')
     return comparison_data
-
 def plot_comparison_heatmap(data, title):
     # Clear any existing plots
     plt.clf()
@@ -493,13 +521,13 @@ def main():
 
     # Add mode selection
     mode = st.radio("Selecciona el modo",
-                    ["Un Ticker, Múltiples Años",
-                     "Múltiples Tickers, Un Año (Cambios Semanales)",
-                     "Múltiples Tickers, Un Año (Cambios Mensuales)"])
+                    ["Un Ticker/Ratio, Múltiples Años",
+                     "Múltiples Tickers/Ratios, Un Año (Cambios Semanales)",
+                     "Múltiples Tickers/Ratios, Un Año (Cambios Mensuales)"])
 
-    if mode == "Un Ticker, Múltiples Años":
+    if mode == "Un Ticker/Ratio, Múltiples Años":
         with st.sidebar:
-            ticker = st.text_input("Introduce el Ticker de la Acción", value="AAPL")
+            ticker_input = st.text_input("Introduce el Ticker o Ratio (ej: AAPL o AAPL/MSFT)", value="AAPL")
             start_date = st.date_input("Fecha de Inicio", value=pd.to_datetime("2017-01-01"))
             end_date = st.date_input("Fecha de Fin", value=pd.to_datetime("2019-12-31"))
             confirm_data = st.button("Confirmar Datos")
@@ -507,54 +535,60 @@ def main():
         if confirm_data:
             try:
                 with st.spinner('Obteniendo y procesando datos...'):
-                    stock_data = fetch_stock_data(ticker, start_date, end_date, selected_source)
+                    if '/' in ticker_input:
+                        # Handle ratio
+                        ticker1, ticker2 = [t.strip() for t in ticker_input.split('/')]
+                        data1 = fetch_stock_data(ticker1, start_date, end_date, selected_source)
+                        data2 = fetch_stock_data(ticker2, start_date, end_date, selected_source)
+                        stock_data = calculate_ticker_ratio(data1, data2)
+                        title = f'Heatmap de Variación Semanal para {ticker1}/{ticker2}'
+                    else:
+                        # Handle single ticker
+                        stock_data = fetch_stock_data(ticker_input, start_date, end_date, selected_source)
+                        title = f'Heatmap de Variación Semanal para {ticker_input}'
+
                     weekly_df = calculate_weekly_variation(stock_data).to_frame(name='Variación')
                     weekly_df['Año'] = weekly_df.index.year
                     weekly_df['Semana'] = weekly_df.index.isocalendar().week
                     heatmap_data = weekly_df.pivot(index='Semana', columns='Año', values='Variación')
 
-                    fig = plot_comparison_heatmap(heatmap_data, f'Heatmap de Variación Semanal para {ticker}')
+                    fig = plot_comparison_heatmap(heatmap_data, title)
                     st.pyplot(fig, dpi=300)
 
             except Exception as e:
                 st.error(f"Ocurrió un error: {str(e)}")
-                st.info("Por favor, verifica si el símbolo del ticker es válido y si el rango de fechas es apropiado.")
+                st.info("Por favor, verifica si los símbolos del ticker son válidos y si el rango de fechas es apropiado.")
 
-    elif mode == "Múltiples Tickers, Un Año (Cambios Semanales)":
+    elif mode in ["Múltiples Tickers/Ratios, Un Año (Cambios Semanales)", 
+                 "Múltiples Tickers/Ratios, Un Año (Cambios Mensuales)"]:
         with st.sidebar:
-            tickers = st.text_input("Introduce los Tickers de las Acciones (separados por comas)", value="AAPL, MSFT, GOOGL")
+            tickers = st.text_input(
+                "Introduce los Tickers o Ratios (separados por comas, ej: AAPL, MSFT, AAPL/MSFT)", 
+                value="AAPL, MSFT, AAPL/MSFT"
+            )
             year = st.number_input("Selecciona el Año", min_value=2000, max_value=2024, value=2020, step=1)
             confirm_data = st.button("Confirmar Datos")
 
         if confirm_data:
             try:
                 with st.spinner('Obteniendo y procesando datos...'):
-                    ticker_list = [ticker.strip().upper() for ticker in tickers.split(",")]
-                    comparison_data = prepare_comparison_data(ticker_list, year, selected_source)
-                    fig = plot_comparison_heatmap(comparison_data, f'Comparación de Variación Semanal para {year}')
+                    ticker_list = [ticker.strip() for ticker in tickers.split(",")]
+
+                    if mode == "Múltiples Tickers/Ratios, Un Año (Cambios Semanales)":
+                        comparison_data = prepare_comparison_data(ticker_list, year, selected_source)
+                        fig = plot_comparison_heatmap(comparison_data, f'Comparación de Variación Semanal para {year}')
+                    else:
+                        monthly_comparison_data = prepare_monthly_comparison_data(ticker_list, year, selected_source)
+                        fig = plot_monthly_comparison_heatmap(monthly_comparison_data, f'Comparación de Variación Mensual para {year}')
+
                     st.pyplot(fig, dpi=300)
 
             except Exception as e:
                 st.error(f"Ocurrió un error: {str(e)}")
-                st.info("Por favor, verifica si los tickers son válidos y si el año es apropiado.")
+                st.info("Por favor, verifica si los tickers/ratios son válidos y si el año es apropiado.")
 
-    elif mode == "Múltiples Tickers, Un Año (Cambios Mensuales)":
-        with st.sidebar:
-            tickers = st.text_input("Introduce los Tickers de las Acciones (separados por comas)", value="AAPL, MSFT, GOOGL")
-            year = st.number_input("Selecciona el Año", min_value=2000, max_value=2024, value=2020, step=1)
-            confirm_data = st.button("Confirmar Datos")
-
-        if confirm_data:
-            try:
-                with st.spinner('Obteniendo y procesando datos...'):
-                    ticker_list = [ticker.strip().upper() for ticker in tickers.split(",")]
-                    monthly_comparison_data = prepare_monthly_comparison_data(ticker_list, year, selected_source)
-                    fig = plot_monthly_comparison_heatmap(monthly_comparison_data, f'Comparación de Variación Mensual para {year}')
-                    st.pyplot(fig, dpi=300)
-
-            except Exception as e:
-                st.error(f"Ocurrió un error: {str(e)}")
-                st.info("Por favor, verifica si los tickers son válidos y si el año es apropiado.")
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
