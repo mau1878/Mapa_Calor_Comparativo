@@ -78,7 +78,9 @@ def evaluate_expression(parsed, start_date, end_date, source):
             raise ValueError(f"No data for ticker {parsed['value']}")
         return data['Close']
     elif parsed['type'] == 'constant':
-        return parsed['value']
+        # Create a Series with the constant value over the date range
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        return pd.Series(parsed['value'], index=date_range)
     elif parsed['type'] == 'operation':
         left_data = evaluate_expression(parsed['left'], start_date, end_date, source)
         right_data = evaluate_expression(parsed['right'], start_date, end_date, source)
@@ -89,10 +91,10 @@ def evaluate_expression(parsed, start_date, end_date, source):
         elif isinstance(right_data, (int, float)) and isinstance(left_data, pd.Series):
             right_data = pd.Series(right_data, index=left_data.index)
         elif isinstance(left_data, (int, float)) and isinstance(right_data, (int, float)):
-            # If both are scalars, we need a dummy index to proceed
-            dummy_date = pd.to_datetime(start_date)
-            left_data = pd.Series(left_data, index=[dummy_date])
-            right_data = pd.Series(right_data, index=[dummy_date])
+            # If both are scalars, create a Series over the date range
+            date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+            left_data = pd.Series(left_data, index=date_range)
+            right_data = pd.Series(right_data, index=date_range)
         
         if isinstance(left_data, pd.Series) and isinstance(right_data, pd.Series):
             common_index = left_data.index.intersection(right_data.index)
@@ -105,7 +107,6 @@ def evaluate_expression(parsed, start_date, end_date, source):
             return truediv(left_data, right_data)
         elif parsed['op'] == '*':
             return mul(left_data, right_data)
-
 # Data Source Functions
 def descargar_datos_yfinance(ticker, start, end):
     try:
@@ -373,6 +374,8 @@ def prepare_comparison_data(tickers_or_expressions, year, source):
             weekly_variation = calculate_weekly_variation(stock_data)
             if not isinstance(weekly_variation.index, pd.DatetimeIndex):
                 raise ValueError("Weekly variation does not have a DatetimeIndex")
+            if len(weekly_variation) < 2:
+                raise ValueError("Not enough data points to compute weekly variation")
             comparison_data[expr] = weekly_variation.loc[f"{year}-01-01":f"{year}-12-31"]
         except Exception as e:
             st.error(f"Error processing {expr}: {e}")
@@ -380,7 +383,6 @@ def prepare_comparison_data(tickers_or_expressions, year, source):
             date_range = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31", freq='W')
             comparison_data[expr] = pd.Series(index=date_range, dtype=float)
     
-    # Ensure the index is a DatetimeIndex before formatting
     if not isinstance(comparison_data.index, pd.DatetimeIndex):
         raise ValueError("Comparison data index is not a DatetimeIndex")
     comparison_data.index = comparison_data.index.strftime('Semana %U')
@@ -475,6 +477,8 @@ def prepare_monthly_comparison_data(tickers_or_expressions, year, source):
             monthly_variation = calculate_monthly_variation(stock_data)
             if not isinstance(monthly_variation.index, pd.DatetimeIndex):
                 raise ValueError("Monthly variation does not have a DatetimeIndex")
+            if len(monthly_variation) < 2:
+                raise ValueError("Not enough data points to compute monthly variation")
             comparison_data[expr] = monthly_variation.loc[f"{year}-01-01":f"{year}-12-31"]
         except Exception as e:
             st.error(f"Error processing {expr}: {e}")
