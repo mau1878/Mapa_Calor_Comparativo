@@ -72,6 +72,9 @@ def parse_expression(expression):
 
 def evaluate_expression(parsed, start_date, end_date, source):
     """Evaluate the parsed expression with stock data."""
+    # Create a common date range for all operations
+    common_date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+    
     if parsed['type'] == 'ticker':
         data = fetch_stock_data(parsed['value'], start_date, end_date, source)
         if data.empty:
@@ -79,42 +82,39 @@ def evaluate_expression(parsed, start_date, end_date, source):
         if 'Close' not in data.columns:
             raise ValueError(f"No 'Close' column in data for ticker {parsed['value']}")
         result = data['Close']
-        # Ensure result is a pd.Series with a DatetimeIndex
-        if not isinstance(result, pd.Series):
-            date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-            result = pd.Series(result, index=date_range)
+        # Reindex to the common date range, filling missing values with NaN
+        result = result.reindex(common_date_range, method=None).ffill().bfill()
         return result
     elif parsed['type'] == 'constant':
-        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-        return pd.Series(parsed['value'], index=date_range)
+        return pd.Series(parsed['value'], index=common_date_range)
     elif parsed['type'] == 'operation':
         left_data = evaluate_expression(parsed['left'], start_date, end_date, source)
         right_data = evaluate_expression(parsed['right'], start_date, end_date, source)
         
-        # Ensure both operands are pd.Series with a DatetimeIndex
+        # Ensure both operands are pd.Series with the common date range
         if isinstance(left_data, (int, float)):
-            date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-            left_data = pd.Series(left_data, index=date_range)
+            left_data = pd.Series(left_data, index=common_date_range)
+        else:
+            left_data = left_data.reindex(common_date_range, method=None).ffill().bfill()
+        
         if isinstance(right_data, (int, float)):
-            date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-            right_data = pd.Series(right_data, index=date_range)
+            right_data = pd.Series(right_data, index=common_date_range)
+        else:
+            right_data = right_data.reindex(common_date_range, method=None).ffill().bfill()
         
-        if isinstance(left_data, pd.Series) and isinstance(right_data, pd.Series):
-            common_index = left_data.index.intersection(right_data.index)
-            if len(common_index) == 0:
-                raise ValueError("No overlapping dates between operands")
-            left_data = left_data.reindex(common_index)
-            right_data = right_data.reindex(common_index)
-        
+        # Perform the operation
         if parsed['op'] == '/':
+            # Handle division by zero by replacing zeros with a small value
+            right_data = right_data.replace(0, 1e-10)
             result = truediv(left_data, right_data)
         elif parsed['op'] == '*':
             result = mul(left_data, right_data)
         
-        # Ensure the result is a pd.Series with a DatetimeIndex
+        # Ensure the result is a pd.Series with the common date range
         if not isinstance(result, pd.Series):
-            date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-            result = pd.Series(result, index=date_range)
+            result = pd.Series(result, index=common_date_range)
+        else:
+            result = result.reindex(common_date_range, method=None).ffill().bfill()
         return result
 # Data Source Functions
 def descargar_datos_yfinance(ticker, start, end):
