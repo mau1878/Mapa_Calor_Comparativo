@@ -13,34 +13,67 @@ st.title("Stock Weekly Variation Heatmap")
 
 # Expression Parsing and Evaluation
 def parse_expression(expression):
-    """Parse a financial expression into components and evaluate it."""
+    """Parse a financial expression into components."""
     expression = expression.strip()
     
+    # Base case: single ticker or constant
     if '/' not in expression and '*' not in expression and '(' not in expression:
+        # Check if it's a ticker with a constant (e.g., GGAL*10)
+        match = re.match(r'([A-Za-z.^]+)\*(\d+)', expression)
+        if match:
+            ticker, constant = match.groups()
+            return {'type': 'operation', 'op': '*', 'left': {'type': 'ticker', 'value': ticker}, 
+                    'right': {'type': 'constant', 'value': float(constant)}}
         return {'type': 'ticker', 'value': expression}
     
+    # Handle parentheses: find the outermost pair
     if '(' in expression:
-        start = expression.rfind('(')
-        end = expression.find(')', start)
-        if end == -1:
+        # Find the outermost parentheses
+        depth = 0
+        start = -1
+        for i, char in enumerate(expression):
+            if char == '(':
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif char == ')':
+                depth -= 1
+                if depth == 0:
+                    # Found matching closing parenthesis
+                    inner_expr = expression[start + 1:i]
+                    inner = parse_expression(inner_expr)
+                    # Replace the parenthetical expression with a placeholder
+                    placeholder = f"[{inner['value']}]"
+                    new_expression = expression[:start] + placeholder + expression[i + 1:]
+                    return parse_expression(new_expression)
+                elif depth < 0:
+                    raise ValueError(f"Unmatched parenthesis in expression: {expression}")
+        if depth > 0:
             raise ValueError(f"Unmatched parenthesis in expression: {expression}")
-        
-        inner = parse_expression(expression[start + 1:end])
-        rest = expression[:start] + f"[{inner['value']}]" + expression[end + 1:]
-        return parse_expression(rest)
     
-    for op in ['/', '*']:
-        if op in expression:
-            left, right = expression.split(op, 1)
-            left = parse_expression(left)
-            right = parse_expression(right)
-            return {'type': 'operation', 'op': op, 'left': left, 'right': right}
+    # Find the last operator outside of parentheses to split on (right-to-left precedence)
+    depth = 0
+    split_op = None
+    split_pos = -1
+    for i in range(len(expression) - 1, -1, -1):
+        char = expression[i]
+        if char == ')':
+            depth += 1
+        elif char == '(':
+            depth -= 1
+        elif depth == 0 and char in ['/', '*']:
+            split_op = char
+            split_pos = i
+            break
     
-    match = re.match(r'([A-Za-z.^]+)\*(\d+)', expression)
-    if match:
-        ticker, constant = match.groups()
-        return {'type': 'operation', 'op': '*', 'left': {'type': 'ticker', 'value': ticker}, 
-                'right': {'type': 'constant', 'value': float(constant)}}
+    if split_op:
+        left_part = expression[:split_pos]
+        right_part = expression[split_pos + 1:]
+        if not left_part or not right_part:
+            raise ValueError(f"Invalid expression: {expression}")
+        left = parse_expression(left_part)
+        right = parse_expression(right_part)
+        return {'type': 'operation', 'op': split_op, 'left': left, 'right': right}
     
     raise ValueError(f"Unable to parse expression: {expression}")
 
