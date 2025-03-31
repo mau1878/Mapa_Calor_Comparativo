@@ -566,7 +566,7 @@ def main():
                 "Introduce los Tickers o Ratios (separados por comas, ej: AAPL, MSFT, AAPL/MSFT)", 
                 value="AAPL, MSFT, AAPL/MSFT"
             )
-            year = st.number_input("Selecciona el Año", min_value=2000, max_value=2024, value=2020, step=1)
+            year = st.number_input("Selecciona el Año", min_value=2000, max_value=2025, value=2020, step=1)
             confirm_data = st.button("Confirmar Datos")
 
         if confirm_data:
