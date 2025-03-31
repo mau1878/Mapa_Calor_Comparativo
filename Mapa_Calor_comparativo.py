@@ -76,6 +76,8 @@ def evaluate_expression(parsed, start_date, end_date, source):
         data = fetch_stock_data(parsed['value'], start_date, end_date, source)
         if data.empty:
             raise ValueError(f"No data for ticker {parsed['value']}")
+        if 'Close' not in data.columns:
+            raise ValueError(f"No 'Close' column in data for ticker {parsed['value']}")
         return data['Close']
     elif parsed['type'] == 'constant':
         date_range = pd.date_range(start=start_date, end=end_date, freq='D')
@@ -113,6 +115,17 @@ def evaluate_expression(parsed, start_date, end_date, source):
 def descargar_datos_yfinance(ticker, start, end):
     try:
         stock_data = yf.download(ticker, start=start, end=end)
+        if stock_data.empty:
+            st.error(f"No data returned from yfinance for {ticker}")
+            return pd.DataFrame()
+        # Check if the DataFrame has a MultiIndex for columns
+        if isinstance(stock_data.columns, pd.MultiIndex):
+            # Flatten the MultiIndex by selecting the relevant columns
+            stock_data.columns = stock_data.columns.get_level_values(0)  # Use the 'Price' level
+            # Ensure 'Close' column exists
+            if 'Close' not in stock_data.columns:
+                st.error(f"No 'Close' column in yfinance data for {ticker}")
+                return pd.DataFrame()
         return stock_data
     except Exception as e:
         st.error(f"Error downloading data from yfinance for {ticker}: {e}")
@@ -373,7 +386,7 @@ def prepare_comparison_data(tickers_or_expressions, year, source):
             if result_series.empty:
                 raise ValueError("Resulting series is empty")
             # Ensure result_series is a pd.Series with a DatetimeIndex
-            if isinstance(result_series, (int, float)):
+            if not isinstance(result_series, pd.Series):
                 date_range = pd.date_range(start=start_date, end=end_date, freq='D')
                 result_series = pd.Series(result_series, index=date_range)
             stock_data = pd.DataFrame({'Close': result_series})
@@ -479,7 +492,7 @@ def prepare_monthly_comparison_data(tickers_or_expressions, year, source):
             if result_series.empty:
                 raise ValueError("Resulting series is empty")
             # Ensure result_series is a pd.Series with a DatetimeIndex
-            if isinstance(result_series, (int, float)):
+            if not isinstance(result_series, pd.Series):
                 date_range = pd.date_range(start=start_date, end=end_date, freq='D')
                 result_series = pd.Series(result_series, index=date_range)
             stock_data = pd.DataFrame({'Close': result_series})
