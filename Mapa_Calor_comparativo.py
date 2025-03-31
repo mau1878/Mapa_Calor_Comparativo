@@ -16,9 +16,7 @@ def parse_expression(expression):
     """Parse a financial expression into components."""
     expression = expression.strip()
     
-    # Base case: single ticker or constant
     if '/' not in expression and '*' not in expression and '(' not in expression:
-        # Check if it's a ticker with a constant (e.g., GGAL*10)
         match = re.match(r'([A-Za-z.^]+)\*(\d+)', expression)
         if match:
             ticker, constant = match.groups()
@@ -26,9 +24,7 @@ def parse_expression(expression):
                     'right': {'type': 'constant', 'value': float(constant)}}
         return {'type': 'ticker', 'value': expression}
     
-    # Handle parentheses: find the outermost pair
     if '(' in expression:
-        # Find the outermost parentheses
         depth = 0
         start = -1
         for i, char in enumerate(expression):
@@ -39,10 +35,8 @@ def parse_expression(expression):
             elif char == ')':
                 depth -= 1
                 if depth == 0:
-                    # Found matching closing parenthesis
                     inner_expr = expression[start + 1:i]
                     inner = parse_expression(inner_expr)
-                    # Replace the parenthetical expression with a placeholder
                     placeholder = f"[{inner['value']}]"
                     new_expression = expression[:start] + placeholder + expression[i + 1:]
                     return parse_expression(new_expression)
@@ -51,7 +45,6 @@ def parse_expression(expression):
         if depth > 0:
             raise ValueError(f"Unmatched parenthesis in expression: {expression}")
     
-    # Find the last operator outside of parentheses to split on (right-to-left precedence)
     depth = 0
     split_op = None
     split_pos = -1
@@ -90,8 +83,21 @@ def evaluate_expression(parsed, start_date, end_date, source):
         left_data = evaluate_expression(parsed['left'], start_date, end_date, source)
         right_data = evaluate_expression(parsed['right'], start_date, end_date, source)
         
+        # Ensure both operands are pd.Series with a DatetimeIndex
+        if isinstance(left_data, (int, float)) and isinstance(right_data, pd.Series):
+            left_data = pd.Series(left_data, index=right_data.index)
+        elif isinstance(right_data, (int, float)) and isinstance(left_data, pd.Series):
+            right_data = pd.Series(right_data, index=left_data.index)
+        elif isinstance(left_data, (int, float)) and isinstance(right_data, (int, float)):
+            # If both are scalars, we need a dummy index to proceed
+            dummy_date = pd.to_datetime(start_date)
+            left_data = pd.Series(left_data, index=[dummy_date])
+            right_data = pd.Series(right_data, index=[dummy_date])
+        
         if isinstance(left_data, pd.Series) and isinstance(right_data, pd.Series):
             common_index = left_data.index.intersection(right_data.index)
+            if len(common_index) == 0:
+                raise ValueError("No overlapping dates between operands")
             left_data = left_data.reindex(common_index)
             right_data = right_data.reindex(common_index)
         
@@ -323,40 +329,60 @@ def fetch_stock_data(ticker, start_date, end_date, source='YFinance'):
         return pd.DataFrame()
 
 def calculate_weekly_variation(data):
-    if data.empty:
-        raise ValueError("No data available for the specified ticker and time range")
-    if 'Close' not in data.columns and not isinstance(data.columns, pd.MultiIndex):
-        raise ValueError("Data does not contain required 'Close' column")
+    if data.empty or 'Close' not in data.columns:
+        raise ValueError("No data available or missing 'Close' column for the specified ticker and time range")
+    
     if isinstance(data.columns, pd.MultiIndex):
         close_prices = data['Close'].iloc[:, 0]
     else:
         close_prices = data['Close']
+    
+    # Ensure close_prices is not empty
+    if close_prices.empty:
+        raise ValueError("Close prices are empty after processing")
+    
     weekly_data = close_prices.resample('W').last()
+    if weekly_data.empty:
+        raise ValueError("No weekly data available after resampling")
+    
     try:
         previous_year_last_day = close_prices.loc[:weekly_data.index[0] - pd.offsets.Week(1)].iloc[-1]
-    except IndexError:
+    except (IndexError, KeyError):
         previous_year_last_day = None
+    
     weekly_variation = weekly_data.pct_change()
     if previous_year_last_day is not None:
         weekly_variation.iloc[0] = (weekly_data.iloc[0] - previous_year_last_day) / previous_year_last_day
     else:
         weekly_variation.iloc[0] = 0
+    
     return weekly_variation
 
 def prepare_comparison_data(tickers_or_expressions, year, source):
     comparison_data = pd.DataFrame()
     start_date = f"{year - 1}-12-25"
     end_date = f"{year}-12-31"
+    
     for expr in tickers_or_expressions:
         parsed = parse_expression(expr)
         try:
             result_series = evaluate_expression(parsed, start_date, end_date, source)
+            if result_series.empty:
+                raise ValueError("Resulting series is empty")
             stock_data = pd.DataFrame({'Close': result_series})
             weekly_variation = calculate_weekly_variation(stock_data)
+            if not isinstance(weekly_variation.index, pd.DatetimeIndex):
+                raise ValueError("Weekly variation does not have a DatetimeIndex")
             comparison_data[expr] = weekly_variation.loc[f"{year}-01-01":f"{year}-12-31"]
         except Exception as e:
             st.error(f"Error processing {expr}: {e}")
-            comparison_data[expr] = pd.Series(dtype=float)
+            # Create a placeholder series with NaN values for the year
+            date_range = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31", freq='W')
+            comparison_data[expr] = pd.Series(index=date_range, dtype=float)
+    
+    # Ensure the index is a DatetimeIndex before formatting
+    if not isinstance(comparison_data.index, pd.DatetimeIndex):
+        raise ValueError("Comparison data index is not a DatetimeIndex")
     comparison_data.index = comparison_data.index.strftime('Semana %U')
     return comparison_data
 
@@ -406,36 +432,58 @@ def plot_comparison_heatmap(data, title):
     return fig
 
 def calculate_monthly_variation(data):
+    if data.empty or 'Close' not in data.columns:
+        raise ValueError("No data available or missing 'Close' column for the specified ticker and time range")
+    
     if isinstance(data.columns, pd.MultiIndex):
         close_prices = data['Close'].iloc[:, 0]
     else:
         close_prices = data['Close']
+    
+    if close_prices.empty:
+        raise ValueError("Close prices are empty after processing")
+    
     monthly_data = close_prices.resample('M').last()
+    if monthly_data.empty:
+        raise ValueError("No monthly data available after resampling")
+    
     try:
         previous_december = close_prices.loc[:monthly_data.index[0] - pd.offsets.MonthBegin(1)].iloc[-1]
-    except IndexError:
+    except (IndexError, KeyError):
         previous_december = None
+    
     monthly_variation = monthly_data.pct_change()
     if previous_december is not None:
         monthly_variation.iloc[0] = (monthly_data.iloc[0] - previous_december) / previous_december
     else:
         monthly_variation.iloc[0] = 0
+    
     return monthly_variation
 
 def prepare_monthly_comparison_data(tickers_or_expressions, year, source):
     comparison_data = pd.DataFrame()
     start_date = f"{year - 1}-12-01"
     end_date = f"{year}-12-31"
+    
     for expr in tickers_or_expressions:
         parsed = parse_expression(expr)
         try:
             result_series = evaluate_expression(parsed, start_date, end_date, source)
+            if result_series.empty:
+                raise ValueError("Resulting series is empty")
             stock_data = pd.DataFrame({'Close': result_series})
             monthly_variation = calculate_monthly_variation(stock_data)
+            if not isinstance(monthly_variation.index, pd.DatetimeIndex):
+                raise ValueError("Monthly variation does not have a DatetimeIndex")
             comparison_data[expr] = monthly_variation.loc[f"{year}-01-01":f"{year}-12-31"]
         except Exception as e:
             st.error(f"Error processing {expr}: {e}")
-            comparison_data[expr] = pd.Series(dtype=float)
+            # Create a placeholder series with NaN values for the year
+            date_range = pd.date_range(start=f"{year}-01-01", end=f"{year}-12-31", freq='M')
+            comparison_data[expr] = pd.Series(index=date_range, dtype=float)
+    
+    if not isinstance(comparison_data.index, pd.DatetimeIndex):
+        raise ValueError("Comparison data index is not a DatetimeIndex")
     comparison_data.index = comparison_data.index.strftime('%b')
     return comparison_data
 
@@ -491,6 +539,8 @@ def main():
                 with st.spinner('Obteniendo y procesando datos...'):
                     parsed = parse_expression(ticker_input)
                     result_series = evaluate_expression(parsed, start_date, end_date, selected_source)
+                    if result_series.empty:
+                        raise ValueError("Resulting series is empty")
                     stock_data = pd.DataFrame({'Close': result_series})
                     title = f'Heatmap de Variación Semanal para {ticker_input}'
                     weekly_df = calculate_weekly_variation(stock_data).to_frame(name='Variación')
