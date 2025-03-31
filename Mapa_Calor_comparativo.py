@@ -78,7 +78,6 @@ def evaluate_expression(parsed, start_date, end_date, source):
             raise ValueError(f"No data for ticker {parsed['value']}")
         return data['Close']
     elif parsed['type'] == 'constant':
-        # Create a Series with the constant value over the date range
         date_range = pd.date_range(start=start_date, end=end_date, freq='D')
         return pd.Series(parsed['value'], index=date_range)
     elif parsed['type'] == 'operation':
@@ -86,14 +85,11 @@ def evaluate_expression(parsed, start_date, end_date, source):
         right_data = evaluate_expression(parsed['right'], start_date, end_date, source)
         
         # Ensure both operands are pd.Series with a DatetimeIndex
-        if isinstance(left_data, (int, float)) and isinstance(right_data, pd.Series):
-            left_data = pd.Series(left_data, index=right_data.index)
-        elif isinstance(right_data, (int, float)) and isinstance(left_data, pd.Series):
-            right_data = pd.Series(right_data, index=left_data.index)
-        elif isinstance(left_data, (int, float)) and isinstance(right_data, (int, float)):
-            # If both are scalars, create a Series over the date range
+        if isinstance(left_data, (int, float)):
             date_range = pd.date_range(start=start_date, end=end_date, freq='D')
             left_data = pd.Series(left_data, index=date_range)
+        if isinstance(right_data, (int, float)):
+            date_range = pd.date_range(start=start_date, end=end_date, freq='D')
             right_data = pd.Series(right_data, index=date_range)
         
         if isinstance(left_data, pd.Series) and isinstance(right_data, pd.Series):
@@ -104,9 +100,15 @@ def evaluate_expression(parsed, start_date, end_date, source):
             right_data = right_data.reindex(common_index)
         
         if parsed['op'] == '/':
-            return truediv(left_data, right_data)
+            result = truediv(left_data, right_data)
         elif parsed['op'] == '*':
-            return mul(left_data, right_data)
+            result = mul(left_data, right_data)
+        
+        # Ensure the result is a pd.Series with a DatetimeIndex
+        if isinstance(result, (int, float)):
+            date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+            result = pd.Series(result, index=date_range)
+        return result
 # Data Source Functions
 def descargar_datos_yfinance(ticker, start, end):
     try:
@@ -370,6 +372,10 @@ def prepare_comparison_data(tickers_or_expressions, year, source):
             result_series = evaluate_expression(parsed, start_date, end_date, source)
             if result_series.empty:
                 raise ValueError("Resulting series is empty")
+            # Ensure result_series is a pd.Series with a DatetimeIndex
+            if isinstance(result_series, (int, float)):
+                date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+                result_series = pd.Series(result_series, index=date_range)
             stock_data = pd.DataFrame({'Close': result_series})
             weekly_variation = calculate_weekly_variation(stock_data)
             if not isinstance(weekly_variation.index, pd.DatetimeIndex):
@@ -387,7 +393,6 @@ def prepare_comparison_data(tickers_or_expressions, year, source):
         raise ValueError("Comparison data index is not a DatetimeIndex")
     comparison_data.index = comparison_data.index.strftime('Semana %U')
     return comparison_data
-
 def plot_comparison_heatmap(data, title):
     plt.clf()
     fig = plt.figure(figsize=(10, 20), dpi=300)
@@ -473,6 +478,10 @@ def prepare_monthly_comparison_data(tickers_or_expressions, year, source):
             result_series = evaluate_expression(parsed, start_date, end_date, source)
             if result_series.empty:
                 raise ValueError("Resulting series is empty")
+            # Ensure result_series is a pd.Series with a DatetimeIndex
+            if isinstance(result_series, (int, float)):
+                date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+                result_series = pd.Series(result_series, index=date_range)
             stock_data = pd.DataFrame({'Close': result_series})
             monthly_variation = calculate_monthly_variation(stock_data)
             if not isinstance(monthly_variation.index, pd.DatetimeIndex):
