@@ -82,8 +82,13 @@ def evaluate_expression(parsed, start_date, end_date, source):
         if 'Close' not in data.columns:
             raise ValueError(f"No 'Close' column in data for ticker {parsed['value']}")
         result = data['Close']
-        # Reindex to the common date range, filling missing values with NaN
-        result = result.reindex(common_date_range, method=None).ffill().bfill()
+        # Reindex to the common date range, filling missing values
+        result = result.reindex(common_date_range, method=None)
+        # Handle NaN values by filling with 0
+        result = result.fillna(0)
+        # Ensure the data is numeric
+        if not pd.api.types.is_numeric_dtype(result):
+            raise ValueError(f"Non-numeric data found in 'Close' column for ticker {parsed['value']}")
         return result
     elif parsed['type'] == 'constant':
         return pd.Series(parsed['value'], index=common_date_range)
@@ -95,26 +100,38 @@ def evaluate_expression(parsed, start_date, end_date, source):
         if isinstance(left_data, (int, float)):
             left_data = pd.Series(left_data, index=common_date_range)
         else:
-            left_data = left_data.reindex(common_date_range, method=None).ffill().bfill()
+            left_data = left_data.reindex(common_date_range, method=None).fillna(0)
         
         if isinstance(right_data, (int, float)):
             right_data = pd.Series(right_data, index=common_date_range)
         else:
-            right_data = right_data.reindex(common_date_range, method=None).ffill().bfill()
+            right_data = right_data.reindex(common_date_range, method=None).fillna(0)
+        
+        # Ensure the data is numeric
+        if not pd.api.types.is_numeric_dtype(left_data):
+            raise ValueError(f"Non-numeric data in left operand: {left_data}")
+        if not pd.api.types.is_numeric_dtype(right_data):
+            raise ValueError(f"Non-numeric data in right operand: {right_data}")
         
         # Perform the operation
         if parsed['op'] == '/':
             # Handle division by zero by replacing zeros with a small value
             right_data = right_data.replace(0, 1e-10)
-            result = truediv(left_data, right_data)
+            try:
+                result = truediv(left_data, right_data)
+            except Exception as e:
+                raise ValueError(f"Error during division operation: {str(e)}")
         elif parsed['op'] == '*':
-            result = mul(left_data, right_data)
+            try:
+                result = mul(left_data, right_data)
+            except Exception as e:
+                raise ValueError(f"Error during multiplication operation: {str(e)}")
         
         # Ensure the result is a pd.Series with the common date range
         if not isinstance(result, pd.Series):
             result = pd.Series(result, index=common_date_range)
         else:
-            result = result.reindex(common_date_range, method=None).ffill().bfill()
+            result = result.reindex(common_date_range, method=None).fillna(0)
         return result
 # Data Source Functions
 def descargar_datos_yfinance(ticker, start, end):
