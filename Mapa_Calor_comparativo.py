@@ -78,7 +78,12 @@ def evaluate_expression(parsed, start_date, end_date, source):
             raise ValueError(f"No data for ticker {parsed['value']}")
         if 'Close' not in data.columns:
             raise ValueError(f"No 'Close' column in data for ticker {parsed['value']}")
-        return data['Close']
+        result = data['Close']
+        # Ensure result is a pd.Series with a DatetimeIndex
+        if not isinstance(result, pd.Series):
+            date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+            result = pd.Series(result, index=date_range)
+        return result
     elif parsed['type'] == 'constant':
         date_range = pd.date_range(start=start_date, end=end_date, freq='D')
         return pd.Series(parsed['value'], index=date_range)
@@ -107,7 +112,7 @@ def evaluate_expression(parsed, start_date, end_date, source):
             result = mul(left_data, right_data)
         
         # Ensure the result is a pd.Series with a DatetimeIndex
-        if isinstance(result, (int, float)):
+        if not isinstance(result, pd.Series):
             date_range = pd.date_range(start=start_date, end=end_date, freq='D')
             result = pd.Series(result, index=date_range)
         return result
@@ -120,13 +125,14 @@ def descargar_datos_yfinance(ticker, start, end):
             return pd.DataFrame()
         # Check if the DataFrame has a MultiIndex for columns
         if isinstance(stock_data.columns, pd.MultiIndex):
-            # Flatten the MultiIndex by selecting the relevant columns
-            stock_data.columns = stock_data.columns.get_level_values(0)  # Use the 'Price' level
-            # Ensure 'Close' column exists
-            if 'Close' not in stock_data.columns:
-                st.error(f"No 'Close' column in yfinance data for {ticker}")
-                return pd.DataFrame()
-        return stock_data
+            # Rename columns to the first level of the MultiIndex ('Price')
+            stock_data.columns = stock_data.columns.get_level_values(0)
+        # Ensure 'Close' column exists
+        if 'Close' not in stock_data.columns:
+            st.error(f"No 'Close' column in yfinance data for {ticker}")
+            return pd.DataFrame()
+        # Ensure the DataFrame has the expected structure
+        return stock_data[['Close']]  # Return only the 'Close' column to match other data sources
     except Exception as e:
         st.error(f"Error downloading data from yfinance for {ticker}: {e}")
         return pd.DataFrame()
@@ -389,6 +395,10 @@ def prepare_comparison_data(tickers_or_expressions, year, source):
             if not isinstance(result_series, pd.Series):
                 date_range = pd.date_range(start=start_date, end=end_date, freq='D')
                 result_series = pd.Series(result_series, index=date_range)
+            # Ensure the series has a DatetimeIndex
+            if not isinstance(result_series.index, pd.DatetimeIndex):
+                date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+                result_series = pd.Series(result_series.values, index=date_range[:len(result_series)])
             stock_data = pd.DataFrame({'Close': result_series})
             weekly_variation = calculate_weekly_variation(stock_data)
             if not isinstance(weekly_variation.index, pd.DatetimeIndex):
@@ -495,6 +505,10 @@ def prepare_monthly_comparison_data(tickers_or_expressions, year, source):
             if not isinstance(result_series, pd.Series):
                 date_range = pd.date_range(start=start_date, end=end_date, freq='D')
                 result_series = pd.Series(result_series, index=date_range)
+            # Ensure the series has a DatetimeIndex
+            if not isinstance(result_series.index, pd.DatetimeIndex):
+                date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+                result_series = pd.Series(result_series.values, index=date_range[:len(result_series)])
             stock_data = pd.DataFrame({'Close': result_series})
             monthly_variation = calculate_monthly_variation(stock_data)
             if not isinstance(monthly_variation.index, pd.DatetimeIndex):
